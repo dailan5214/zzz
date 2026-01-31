@@ -78,25 +78,25 @@ fn on_request(ctx: *const zzz.Context, _: void) !zzz.HTTP.Respond {
 // Upgrade handler
 fn on_upgrade(req: *const zzz.Request, proto: []const u8) !bool {
     if (!std.mem.eql(u8, proto, "websocket")) return false;
-    
+
     const key = req.headers.get("Sec-WebSocket-Key") orelse return false;
     const ext = req.headers.get("Sec-WebSocket-Extensions");
-    
-    var header_buf = std.ArrayList(u8).init(std.heap.page_allocator);
-    defer header_buf.deinit();
-    
+
+    var header_buf: std.ArrayListUnmanaged(u8) = .{};
+    defer header_buf.deinit(std.heap.page_allocator);
+
     //const res = try websocket.upgrade(req.socket, req.runtime, std.heap.page_allocator, key, ext, header_buf.writer() );
-    const res = try websocket.upgrade(req.socket, req.runtime, req.runtime.allocator, key, ext, header_buf.writer() );
-    
+    const res = try websocket.upgrade(req.socket, req.runtime, req.runtime.allocator, key, ext, header_buf.writer(std.heap.page_allocator));
+
     _ = try req.socket.send_all(req.runtime, header_buf.items);
-    
+
     const ws_handler = websocket.Handler{
       .on_connect = on_ws_connect,
       .on_message = on_ws_message,
       .on_close = on_ws_close,
       .on_disconnect = on_ws_disconnect,
     };
-    
+
     if (ws_handler.on_connect) |f| try f(res.conn);
     try req.runtime.spawn(.{ res.conn, ws_handler, std.heap.page_allocator }, websocket.runLoop, STACK_SIZE);
     //try req.runtime.spawn(.{ res.conn, ws_handler, req.runtime.allocator }, websocket.runLoop, STACK_SIZE);
@@ -120,10 +120,10 @@ fn on_ws_endpoint(ctx: *const zzz.Context, _: void) !zzz.HTTP.Respond {
   };
   const ext = req.headers.get("Sec-WebSocket-Extensions");
   
-  var header_buf = std.ArrayList(u8).init(ctx.allocator);
-  defer header_buf.deinit();
-  
-  const res = try websocket.upgrade(&ctx.socket, ctx.runtime, ctx.allocator, key, ext, header_buf.writer());
+  var header_buf: std.ArrayListUnmanaged(u8) = .{};
+  defer header_buf.deinit(ctx.allocator);
+
+  const res = try websocket.upgrade(&ctx.socket, ctx.runtime, ctx.allocator, key, ext, header_buf.writer(ctx.allocator));
   
   _ = try ctx.socket.send_all(ctx.runtime, header_buf.items);
   

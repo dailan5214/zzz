@@ -37,6 +37,12 @@ pub fn build(b: *std.Build) void {
         add_example(b, "unix", false, target, optimize, zzz);
     }
 
+    // WebSocket examples
+    add_ws_example(b, "ex_ws_1", "examples_ws/example_ws_1.zig", target, optimize, zzz);
+    add_ws_example(b, "ex_ws_2", "examples_ws/example_ws_2.zig", target, optimize, zzz);
+    add_ws_example(b, "ex_ws_3", "examples_ws/example_ws_3.zig", target, optimize, zzz);
+    add_ws_example(b, "ex_ws_4", "examples_ws/example_ws_4.zig", target, optimize, zzz);
+
     const tests = b.addTest(.{
         .name = "tests",
         .root_module = b.addModule("tests", .{
@@ -91,4 +97,32 @@ fn add_example(
     const run_step = b.step(b.fmt("run_{s}", .{name}), b.fmt("Run zzz example ({s})", .{name}));
     run_step.dependOn(&install_artifact.step);
     run_step.dependOn(&run_artifact.step);
+}
+
+fn add_ws_example(
+    b: *std.Build,
+    name: []const u8,
+    source_path: []const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zzz_module: *std.Build.Module,
+) void {
+    const mod = b.createModule(.{
+        .root_source_file = b.path(source_path),
+        .optimize = optimize,
+        .target = target,
+    });
+    mod.addImport("zzz", zzz_module);
+
+    const exe = b.addExecutable(.{
+        .name = name,
+        .root_module = mod,
+        .use_llvm = true,
+    });
+
+    const install = b.addInstallBinFile(exe.getEmittedBin(), b.fmt("../../{s}", .{name}));
+    b.getInstallStep().dependOn(&install.step);
+
+    const build_step = b.step(name, b.fmt("Build ws example ({s})", .{name}));
+    build_step.dependOn(&install.step);
 }

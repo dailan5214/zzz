@@ -4,7 +4,7 @@
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayList = std.ArrayListUnmanaged;
 
 const BigInt = std.math.big.int.Managed;
 const Limb = std.math.big.Limb;
@@ -112,13 +112,13 @@ pub const Bert = struct{
   
   // encode
   pub fn encode(self: Self, term: Bert_Value) ![]u8{
-    var buffer = ArrayList(u8).init(self.allocator);
-    defer buffer.deinit();
-    
-    try buffer.append(131); // VERSION_MAGIC
+    var buffer: ArrayList(u8) = .{};
+    defer buffer.deinit(self.allocator);
+
+    try buffer.append(self.allocator, 131); // VERSION_MAGIC
     try encodeValue(self.allocator, &buffer, term);
-    
-    return buffer.toOwnedSlice();
+
+    return buffer.toOwnedSlice(self.allocator);
   }
   
   // decode
@@ -137,98 +137,98 @@ fn encodeValue(allocator: Allocator, buffer: *ArrayList(u8), value: Bert_Value) 
   switch(value){
     .int => |n|{
       if(n >= 0 and n <= 255){
-        try buffer.append(97); // SMALL_INTEGER_EXT
-        try buffer.append( @as(u8, @intCast(n)) );
+        try buffer.append(allocator, 97); // SMALL_INTEGER_EXT
+        try buffer.append(allocator, @as(u8, @intCast(n)));
       }else if(n >= -2_147_483_648 and n <= 2_147_483_647){
-        try buffer.append(98); // INTEGER_EXT
-        const be = @byteSwap( @as(i32, @intCast(n)) );
-        try buffer.appendSlice(std.mem.asBytes(&be));
+        try buffer.append(allocator, 98); // INTEGER_EXT
+        const be = @byteSwap(@as(i32, @intCast(n)));
+        try buffer.appendSlice(allocator, std.mem.asBytes(&be));
       }else{
         try encodeBigInt(allocator, buffer, n, false);
       }
     },
-    
+
     .big_int => |bi|{
-      if( bi.eqlZero() ){ // encode zero as SMALL_BIG_EXT: [110, 1, 0, 0]
-        try buffer.append(110);
-        try buffer.append(1);
-        try buffer.append(0);
-        try buffer.append(0);
+      if(bi.eqlZero()){ // encode zero as SMALL_BIG_EXT: [110, 1, 0, 0]
+        try buffer.append(allocator, 110);
+        try buffer.append(allocator, 1);
+        try buffer.append(allocator, 0);
+        try buffer.append(allocator, 0);
         return;
       }
-      
+
       const is_neg = !bi.isPositive();
       var abs_bi = try BigInt.init(allocator);
       defer abs_bi.deinit();
-      try abs_bi.copy( bi.toConst() );
+      try abs_bi.copy(bi.toConst());
       if(is_neg){
         abs_bi.negate();
       }
-      
+
       try encodeBigIntFromAbs(allocator, buffer, &abs_bi, is_neg);
     },
-    
+
     .float => |f|{
-      try buffer.append(70); // NEW_FLOAT_EXT
+      try buffer.append(allocator, 70); // NEW_FLOAT_EXT
       const bits = @as(u64, @bitCast(f));
       var buf: [8]u8 = undefined;
       std.mem.writeInt(u64, &buf, bits, .big);
-      try buffer.appendSlice(&buf);
+      try buffer.appendSlice(allocator, &buf);
     },
-    
+
     .atom => |s|{
       if(s.len > 65535){ return error.AtomTooLong; }
-      try buffer.append(118); // ATOM_UTF8_EXT
-      const len_be = @byteSwap( @as(u16, @intCast( @as(u16, @intCast(s.len)) )) );
-      try buffer.appendSlice(std.mem.asBytes(&len_be));
-      try buffer.appendSlice(s);
+      try buffer.append(allocator, 118); // ATOM_UTF8_EXT
+      const len_be = @byteSwap(@as(u16, @intCast(@as(u16, @intCast(s.len)))));
+      try buffer.appendSlice(allocator, std.mem.asBytes(&len_be));
+      try buffer.appendSlice(allocator, s);
     },
-    
+
     .binary => |b|{
       if(b.len > std.math.maxInt(u32)){ return error.BinaryTooLong; }
-      try buffer.append(109); // BINARY_EXT
-      const len_be = @byteSwap( @as(u32, @intCast(b.len)) );
-      try buffer.appendSlice(std.mem.asBytes(&len_be));
-      try buffer.appendSlice(b);
+      try buffer.append(allocator, 109); // BINARY_EXT
+      const len_be = @byteSwap(@as(u32, @intCast(b.len)));
+      try buffer.appendSlice(allocator, std.mem.asBytes(&len_be));
+      try buffer.appendSlice(allocator, b);
     },
-    
+
     .tuple => |elems|{
       if(elems.len <= 255){
-        try buffer.append(104); // SMALL_TUPLE_EXT
-        try buffer.append( @as(u8, @intCast(elems.len)) );
+        try buffer.append(allocator, 104); // SMALL_TUPLE_EXT
+        try buffer.append(allocator, @as(u8, @intCast(elems.len)));
       }else{
-        try buffer.append(105); // LARGE_TUPLE_EXT
-        const len_be = @byteSwap( @as(u32, @intCast(elems.len)) );
-        try buffer.appendSlice(std.mem.asBytes(&len_be));
+        try buffer.append(allocator, 105); // LARGE_TUPLE_EXT
+        const len_be = @byteSwap(@as(u32, @intCast(elems.len)));
+        try buffer.appendSlice(allocator, std.mem.asBytes(&len_be));
       }
       for(elems) |elem|{
         try encodeValue(allocator, buffer, elem);
       }
     },
-    
+
     .list => |elems|{
-      try buffer.append(108); // LIST_EXT
-      const len_be = @byteSwap( @as(u32, @intCast(elems.len)) );
-      try buffer.appendSlice(std.mem.asBytes(&len_be));
+      try buffer.append(allocator, 108); // LIST_EXT
+      const len_be = @byteSwap(@as(u32, @intCast(elems.len)));
+      try buffer.appendSlice(allocator, std.mem.asBytes(&len_be));
       for(elems) |elem|{
         try encodeValue(allocator, buffer, elem);
       }
-      try buffer.append(106); // NIL_EXT
+      try buffer.append(allocator, 106); // NIL_EXT
     },
-    
+
     .map => |pairs|{
       if(pairs.len > std.math.maxInt(u32)){ return error.MapTooLarge; }
-      try buffer.append(116); // MAP_EXT
-      const len_be = @byteSwap( @as(u32, @intCast(pairs.len)) );
-      try buffer.appendSlice(std.mem.asBytes(&len_be));
+      try buffer.append(allocator, 116); // MAP_EXT
+      const len_be = @byteSwap(@as(u32, @intCast(pairs.len)));
+      try buffer.appendSlice(allocator, std.mem.asBytes(&len_be));
       for(pairs) |pair|{
         try encodeValue(allocator, buffer, pair.key);
         try encodeValue(allocator, buffer, pair.val);
       }
     },
-    
+
     .@"null" => {
-      try buffer.append(106); // NIL_EXT
+      try buffer.append(allocator, 106); // NIL_EXT
     },
   }
 }
@@ -236,51 +236,51 @@ fn encodeValue(allocator: Allocator, buffer: *ArrayList(u8), value: Bert_Value) 
 
 fn encodeBigInt(allocator: Allocator, buffer: *ArrayList(u8), n: i64, is_neg: bool) !void{
   var abs_n: u64 = if(is_neg) @as(u64, @intCast(-n)) else @as(u64, @intCast(n));
-  var digits = std.ArrayList(u8).init(allocator);
-  defer digits.deinit();
-  
+  var digits: std.ArrayListUnmanaged(u8) = .{};
+  defer digits.deinit(allocator);
+
   if(abs_n == 0){
-    try digits.append(0);
+    try digits.append(allocator, 0);
   }else{
     while(abs_n > 0) : (abs_n >>= 8){
-      try digits.append( @as(u8, @intCast(abs_n & 0xFF)) );
+      try digits.append(allocator, @as(u8, @intCast(abs_n & 0xFF)));
     }
   }
-  
+
   const len = digits.items.len;
   if(len > 255){ return error.BigIntTooLargeForSmallBig; }
-  
-  try buffer.append(110); // SMALL_BIG_EXT
-  try buffer.append( @as(u8, @intCast(len)) );
-  try buffer.append(if (is_neg) 1 else 0);
-  try buffer.appendSlice(digits.items);
+
+  try buffer.append(allocator, 110); // SMALL_BIG_EXT
+  try buffer.append(allocator, @as(u8, @intCast(len)));
+  try buffer.append(allocator, if (is_neg) 1 else 0);
+  try buffer.appendSlice(allocator, digits.items);
 }
 
 
 fn encodeBigIntFromAbs(allocator: Allocator, buffer: *ArrayList(u8), abs_bi: *const BigInt, is_neg: bool) !void{ // abs_bi > 0
-  var digits = std.ArrayList(u8).init(allocator);
-  defer digits.deinit();
-  
-  for( abs_bi.limbs[0..abs_bi.len()] ) |limb|{
+  var digits: std.ArrayListUnmanaged(u8) = .{};
+  defer digits.deinit(allocator);
+
+  for(abs_bi.limbs[0..abs_bi.len()]) |limb|{
     var val = limb;
     var i: usize = 0;
     while(i < @sizeOf(Limb)) : (i += 1){
-      try digits.append( @as(u8, @truncate(val)) );
+      try digits.append(allocator, @as(u8, @truncate(val)));
       val >>= 8;
     }
   }
-  
+
   while(digits.items.len > 1 and digits.items[digits.items.len - 1] == 0){
     _ = digits.pop();
   }
-  
+
   const len = digits.items.len;
   if(len > 255){ return error.BigIntTooLargeForSmallBig; }
-  
-  try buffer.append(110); // SMALL_BIG_EXT
-  try buffer.append( @as(u8, @intCast(len)) );
-  try buffer.append( if(is_neg) 1 else 0 );
-  try buffer.appendSlice(digits.items);
+
+  try buffer.append(allocator, 110); // SMALL_BIG_EXT
+  try buffer.append(allocator, @as(u8, @intCast(len)));
+  try buffer.append(allocator, if(is_neg) 1 else 0);
+  try buffer.appendSlice(allocator, digits.items);
 }
 
 
@@ -652,36 +652,36 @@ pub fn map_lookup(val: Bert_Value, key: Bert_Value) Bert_Get_Error!Bert_Value{
 // next for pretty print in erlang style
 
 pub fn format_bert(allocator: Allocator, value: Bert_Value) ![]const u8{
-  var out = std.ArrayList(u8).init(allocator);
-  defer out.deinit();
-  
-  try writeValue(&out, value);
-  return out.toOwnedSlice();
+  var out: std.ArrayListUnmanaged(u8) = .{};
+  defer out.deinit(allocator);
+
+  try writeValue(allocator, &out, value);
+  return out.toOwnedSlice(allocator);
 }
 
 
-fn writeValue(buf: *std.ArrayList(u8), value: Bert_Value) !void{
-  const writer = buf.writer();
+fn writeValue(allocator: Allocator, buf: *std.ArrayListUnmanaged(u8), value: Bert_Value) !void{
+  const writer = buf.writer(allocator);
   switch(value){
     .int => |i|{
       try writer.print("{}", .{i});
     },
-    
+
     .big_int => |bi|{ // BigInt to decimal string
-      const s = try bi.toString(buf.allocator, 10, .lower);
-      defer buf.allocator.free(s);
+      const s = try bi.toString(allocator, 10, .lower);
+      defer allocator.free(s);
       try writer.print("{any}", .{s});
     },
-    
+
     .float => |f|{
       try writer.print("{any}", .{f});
     },
-    
+
     .atom => |a|{
       const needQuotes = !isSimpleAtom(a); // simple atoms (ascii, digits and _ symbol, begins from ascii symbol)
       if(needQuotes) try writer.print("'{s}'", .{a}) else try writer.print("{s}", .{a});
     },
-    
+
     .binary => |b|{
       //if(isPrintableAscii(b)){ // as text when ascii, otherwise bytes
         try writer.print("<<\"{s}\">>", .{b});
@@ -694,36 +694,36 @@ fn writeValue(buf: *std.ArrayList(u8), value: Bert_Value) !void{
       //  try writer.print(">>", .{});
       //}
     },
-    
+
     .tuple => |elems|{
       try writer.print("{{", .{});
       for(elems, 0..) |e, i|{
         if(i != 0){ try writer.print(", ", .{}); }
-        try writeValue(buf, e);
+        try writeValue(allocator, buf, e);
       }
       try writer.print("}}", .{});
     },
-    
+
     .list => |elems|{
       try writer.print("[", .{});
       for(elems, 0..) |e, i|{
         if(i != 0){ try writer.print(", ", .{}); }
-        try writeValue(buf, e);
+        try writeValue(allocator, buf, e);
       }
       try writer.print("]", .{});
     },
-    
+
     .map => |pairs|{
       try writer.print("#{{", .{});
       for(pairs, 0..) |p, i|{
         if(i != 0){ try writer.print(", ", .{}); }
-        try writeValue(buf, p.key);
+        try writeValue(allocator, buf, p.key);
         try writer.print(" => ", .{});
-        try writeValue(buf, p.val);
+        try writeValue(allocator, buf, p.val);
       }
       try writer.print("}}", .{});
     },
-    
+
     .@"null" => { // NIL is empty list in BERT
       try writer.print("[]", .{});
     },
