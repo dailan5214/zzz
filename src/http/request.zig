@@ -2,6 +2,11 @@ const std = @import("std");
 const assert = std.debug.assert;
 const testing = std.testing;
 
+//const SecureSocket = @import("secsock").SecureSocket;
+//const Runtime = @import("tardy").Runtime;
+const secsock = @import("secsock");
+const tardy = @import("tardy");
+
 const AnyCaseStringMap = @import("../core/any_case_string_map.zig").AnyCaseStringMap;
 const CookieMap = @import("cookie.zig").CookieMap;
 const HTTPError = @import("lib.zig").HTTPError;
@@ -17,7 +22,11 @@ pub const Request = struct {
     headers: AnyCaseStringMap,
     cookies: CookieMap,
     body: ?[]const u8 = null,
-
+    //socket: *const SecureSocket = undefined, // for WebSocket on_upgrade
+    //runtime: *Runtime = undefined,
+    socket: *const secsock.SecureSocket = undefined, // for WebSocket on_upgrade
+    runtime: *tardy.Runtime = undefined,
+    
     /// This is for constructing a Request.
     pub fn init(allocator: std.mem.Allocator) Request {
         const headers: AnyCaseStringMap = .init(allocator);
@@ -245,3 +254,4 @@ test "Malformed AnyCaseStringMap" {
     });
     try testing.expectError(HTTPError.MalformedRequest, err);
 }
+

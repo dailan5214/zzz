@@ -46,6 +46,11 @@ pub const TLSFileOptions = union(enum) {
     },
 };
 
+pub const TLSConfig = struct {
+    cert: TLSFileOptions,
+    key: TLSFileOptions,
+};
+
 /// These are various general configuration
 /// options that are important for the actual framework.
 ///
@@ -117,6 +122,11 @@ pub const ServerConfig = struct {
     ///
     /// Default: 2KB
     request_uri_bytes_max: u32 = 1024 * 2,
+    /// Callback for upgrade request (Websocket)
+    /// return true if upgrade processed
+    on_upgrade: ?*const fn (*const Request, []const u8) anyerror!bool = null,
+    /// we need two tls files - cert + key
+    tls: ?TLSConfig = null,
 };
 
 pub const Provision = struct {
@@ -332,18 +342,50 @@ pub const Server = struct {
                     assert(info.current_length <= info.content_length);
                 },
             },
+            
             .handler => {
-                const found = try router.get_bundle_from_host(
+                
+                const request_text = provision.zc_recv_buffer.as_slice();
+                var request = Request.init(rt.allocator);
+                request.parse_headers(request_text, .{
+                  .request_bytes_max = config.request_bytes_max,
+                  .request_uri_bytes_max = config.request_uri_bytes_max,
+                }) catch |e| {
+                  log.debug("malformed request| {}", .{e});
+                  break :http_loop;
+                };
+                
+                
+                if (config.on_upgrade) |on_upgrade| { // check is this WebSocket upgrade
+                  request.socket = &secure;
+                  request.runtime = rt;
+                  
+                  const upgrade_header = request.headers.get("Upgrade");
+                  if (upgrade_header) |upgrade| {
+                    
+                    if (std.mem.eql(u8, upgrade, "websocket")) {
+                      if (try on_upgrade(&request, upgrade)) {
+                        continue :http_loop;
+                      }
+                    }
+                    
+                  }
+                }
+                
+                const found = try router.get_bundle_from_host( // continue as common HTTP if not WebSocket upgrade
                     rt.allocator,
-                    provision.request.uri.?,
+                    //provision.request.uri.?,
+                    request.uri.?,
                     provision.captures,
                     &provision.queries,
                 );
                 defer rt.allocator.free(found.duped);
                 defer for (found.duped) |dupe| rt.allocator.free(dupe);
-
+                
+                
                 const h_with_data: HandlerWithData = found.route.get_handler(
-                    provision.request.method.?,
+                    //provision.request.method.?,
+                    request.method.?,
                 ) orelse {
                     provision.response.headers.clearRetainingCapacity();
                     provision.response.status = .@"Method Not Allowed";
@@ -353,7 +395,8 @@ pub const Server = struct {
                     state = .respond;
                     continue;
                 };
-
+                
+                
                 const context: Context = .{
                     .runtime = rt,
                     .allocator = provision.arena.allocator(),
@@ -365,13 +408,14 @@ pub const Server = struct {
                     .captures = found.captures,
                     .queries = found.queries,
                 };
-
+                
                 var next: Next = .{
                     .context = &context,
                     .middlewares = h_with_data.middlewares,
                     .handler = h_with_data,
                 };
-
+                
+                
                 const next_respond: Respond = next.run() catch |e| blk: {
                     log.warn("rt{d} - \"{s} {s}\" {} ({f})", .{
                         rt.id,
@@ -381,8 +425,7 @@ pub const Server = struct {
                         secure.socket.addr,
                     });
 
-                    // If in Debug Mode, we will return the error name. In other modes,
-                    // we won't to avoid leaking implemenation details.
+                    // If in Debug Mode, we will return the error name
                     const body = if (comptime builtin.mode == .Debug) @errorName(e) else "";
 
                     break :blk try provision.response.apply(.{
@@ -391,10 +434,10 @@ pub const Server = struct {
                         .body = body,
                     });
                 };
-
+                
+                
                 switch (next_respond) {
                     .standard => {
-                        // applies the respond onto the response
                         //try provision.response.apply(respond);
                         state = .respond;
                     },
@@ -406,15 +449,15 @@ pub const Server = struct {
                                 log.debug("closing connection, exceeded keepalive max", .{});
                                 break :http_loop;
                             }
-
                             keepalive_count += 1;
                         }
-
+                        
                         try prepare_new_request(&state, provision, config);
                     },
                     .close => break :http_loop,
                 }
             },
+            
             .respond => {
                 const body = provision.response.body orelse "";
                 const content_length = body.len;
@@ -537,3 +580,4 @@ pub const Server = struct {
         );
     }
 };
+
